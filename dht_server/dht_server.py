@@ -9,6 +9,8 @@ from queue import Queue
 from threading import Thread
 from typing import Callable
 
+from bencode import bencode
+
 
 
 # ================================================================================================= Global Variables
@@ -25,11 +27,21 @@ class Address:
 		self.port:int = port
 
 
-# A Message is a bytestring to be sent out to a given Address.
+	def asTuple(self) -> tuple[str,int]:
+		return (self.addr, self.port)
+
+
+# A Message is a dict (that will be converted to a bencoded bytestring before sending) that is to
+#   be sent out to a given Address.
 class Message:
-	def __init__(self, msg:bytes, to:Address) -> None:
-		self.msg:bytes = msg
+	def __init__(self, msg:dict, to:Address) -> None:
+		self.msg:dict = msg
 		self.to:Address = to
+
+
+	def encoded(self) -> bytes:
+		"""Returns the bencoded message, which is how DHT messages are required to be formatted."""
+		return bencode(self.msg)
 
 
 
@@ -85,18 +97,34 @@ class DHTServer:
 				elif rs is self.sig_recv:
 					self.sig_recv.recv(1)
 
-					#TODO: Complete.
+					msg:Message = self.send_queue.get()
+					self.log(f"Sending Message to {msg.to.asTuple()}: {msg.msg}", 'debug')
+					self.sock.sendto(msg.encoded(), msg.to.asTuple())
 
 
 	def start(self) -> None:
 		"""Runs the main communications component of the DHT server in a new thread."""
+
+		self.running = True
 
 		self.comms_thread = Thread(target=self.commsLoop)
 		self.comms_thread.start()
 		self.log('Started DHT server communications thread.', 'info')
 
 
+	def sendMessage(self, msg:Message) -> None:
+		"""Adds the provided Message to the send queue and then sends a signal to process the
+			queue."""
+
+		self.send_queue.put(msg)
+
+		# Send a single byte of data through the signal send socket to wake up the main
+		#   communications thread, which will then process the send queue.
+		self.sig_send.send(b'\x00')
+
+
 
 #TODO: The following is temporary test code.
 dht_serv:DHTServer = DHTServer()
 dht_serv.start()
+dht_serv.sendMessage(Message({'msg':'test'}, Address('127.0.0.1', 6881)))
